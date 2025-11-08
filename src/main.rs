@@ -17,6 +17,8 @@ mod database;
 
 use database::commande::Commandes;
 
+use crate::security::verify_packet_signature;
+
 type Tx = UnboundedSender<Message>;
 type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
 type KeysMap = Arc<Mutex<HashMap<SocketAddr, String>>>;
@@ -65,7 +67,7 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
 
                 if !security::verify_packet_signature(msg.to_string()) {
                     // TODO: Upgrade security here (temp ban / warn)
-                    let message = Message::text("Invalid payload, signature did not match");
+                    let message = Message::text("error__Invalid payload, signature did not match");
                     if let Some(peer) = peers.iter().find(|(ip_addr, _)| ip_addr == &&addr) {
                         let (_, websocker_peer) = peer;
                         websocker_peer.unbounded_send(message).unwrap();
@@ -78,7 +80,7 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
                 // If we get the key then register it in the array
                 keys_map.lock().unwrap().insert(addr, split_msg[1].to_string());
 
-                let message = Message::text(format!("Successfully logged in using the following key :\n{}", split_msg[1]));
+                let message = Message::text(format!("announcement__Successfully logged in using the following key :\n{}", split_msg[1]));
 
                 if let Some(peer) = peers.iter().find(|(ip_addr, _)| ip_addr == &&addr) {
                     let (_, websocker_peer) = peer;
@@ -89,7 +91,7 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
             },
             "message" => {
                 if !security::verify_packet_signature(msg.to_string()) {
-                    let message = Message::text("Invalid payload, signature did not match");
+                    let message = Message::text("error__Invalid payload, signature did not match");
                     if let Some(peer) = peers.iter().find(|(ip_addr, _)| ip_addr == &&addr) {
                         let (_, websocker_peer) = peer;
                         websocker_peer.unbounded_send(message).unwrap();
@@ -104,10 +106,36 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
                     peers.iter().filter(|(peer_addr, _)| peer_addr != &&addr).map(|(_, ws_sink)| ws_sink);
 
                 for recp in broadcast_recipients {
-                    let message = Message::text(format!("[{}] - {}",addr, msg.to_string().split("__").collect::<Vec<&str>>()[3])); // Sending the message to everyone
+                    let message = Message::text(format!("message__[{}] - {}",addr, msg.to_string().split("__").collect::<Vec<&str>>()[3])); // Sending the message to everyone
                     recp.unbounded_send(message).unwrap();
                 }
             },
+            "retrieve_published" => {
+                if !security::verify_packet_signature(msg.to_string()) {
+                    let message = Message::text("error__Invalid payload, signature did not match");
+                    if let Some(peer) = peers.iter().find(|(ip_addr, _)| ip_addr == &&addr) {
+                        let (_, websocker_peer) = peer;
+                        websocker_peer.unbounded_send(message).unwrap();
+                    } else {
+                        println!("Unable to get the sender in the peers_map to send back connection message");
+                    }
+                    return future::ok(());
+                }
+                
+                // Check in the database if the given public key exist
+                // True => return the published key
+                // False => return an error telling user is not registered
+
+
+                // for testing purpose we will return sample data
+                let message = Message::text("published_x__{test published x}");
+
+                // Return the message to the sender
+                if let Some(peer) = peers.iter().find(|(ip_addr, _)| ip_addr == &&addr) {
+                    let (_, websocket_peer) = peer;
+                    websocket_peer.unbounded_send(message).unwrap();
+                }
+            }
             "friend_request" => {
                 let message = Message::text("Request friend received");
                 if let Some(peer) = peers.iter().find(|(ip_addr, _)| ip_addr == &&addr) {
