@@ -10,13 +10,15 @@ use futures_channel::mpsc::{unbounded, UnboundedSender};
 use futures_util::{future, pin_mut, stream::TryStreamExt, StreamExt};
 
 use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::tungstenite::protocol::{frame::coding::Data, Message};
+use tokio_tungstenite::tungstenite::protocol::Message;
 
 mod security;
 mod database;
 mod packet;
 
 use database::commande::Commandes;
+
+use crate::packet::{Packet, PacketError, extract_and_verify};
 
 type Tx = UnboundedSender<Message>;
 type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
@@ -40,7 +42,54 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
         println!("Received a message from {}: {}", addr, msg.to_text().unwrap());
         let peers = peer_map.lock().unwrap();
 
+        let packet = extract_and_verify(msg.to_text().expect("Unableto get string version of the packet"));
+
+        match packet {
+            Ok(Packet::Login(login_data)) => {
+                let message = Message::text(format!("announcement__Successfully logged in using the following key :\n{}", &login_data.author_key));
+                
+                // If we get the key then register it in the array
+                keys_map.lock().unwrap().insert(addr, login_data.author_key);
+
+
+                if let Some(peer) = peers.iter().find(|(ip_addr, _)| ip_addr == &&addr) {
+                    let (_, websocker_peer) = peer;
+                    websocker_peer.unbounded_send(message).unwrap();
+                } else {
+                    println!("Unable to get the sender in the peers_map to send back connection message");
+                }
+                return future::ok(());
+            }
+            Err(PacketError::Signature) => {
+                // TODO: Upgrade security here (temp ban / warn)
+                let message = Message::text("error__Invalid payload, signature did not match");
+                if let Some(peer) = peers.iter().find(|(ip_addr, _)| ip_addr == &&addr) {
+                    let (_, websocker_peer) = peer;
+                    websocker_peer.unbounded_send(message).unwrap();
+                } else {
+                    println!("Unable to get the sender in the peers_map to send back connection message");
+                }
+                return future::ok(());
+            }
+            Err(PacketError::Data) => {
+                todo!()
+            }
+            Err(PacketError::PacketFormat) => {
+                let message = Message::text("Packet pattern not recognized");
+                if let Some(peer) = peers.iter().find(|(ip_addr, _)| ip_addr == &&addr) {
+                    let (_, websocker_peer) = peer;
+                    websocker_peer.unbounded_send(message).unwrap();
+                } else {
+                    println!("Unable to get the sender in the peers_map to send back error message");
+                }
+            }
+            _ => {
+                todo!("Packet not implemented yet")
+            }
+        }
+
         let split_msg: Vec<&str> = msg.to_text().expect("Unable to get string version of the message").split("__").collect();
+
 
         // First we check the kind of message received
         match split_msg[0] {
@@ -77,7 +126,7 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
                     }
                     return future::ok(());
                 }
-                
+
                 // If we get the key then register it in the array
                 keys_map.lock().unwrap().insert(addr, split_msg[1].to_string());
 
@@ -104,7 +153,7 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
 
                 // We want to broadcast the message to everyone except ourselves.
                 let broadcast_recipients =
-                    peers.iter().filter(|(peer_addr, _)| peer_addr != &&addr).map(|(_, ws_sink)| ws_sink);
+                peers.iter().filter(|(peer_addr, _)| peer_addr != &&addr).map(|(_, ws_sink)| ws_sink);
 
                 for recp in broadcast_recipients {
                     let message = Message::text(format!("message__[{}] - {}",addr, msg.to_string().split("__").collect::<Vec<&str>>()[3])); // Sending the message to everyone
@@ -122,7 +171,7 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
                     }
                     return future::ok(());
                 }
-                
+
                 // Check in the database if the given public key exist
                 // True => return the published key
                 // False => return an error telling user is not registered
@@ -193,6 +242,6 @@ async fn main() -> Result<(), IoError> {
     while let Ok((stream, addr)) = listener.accept().await {
         tokio::spawn(handle_connection(state.clone(), stream, addr, users_keys.clone()));
     }
-    
+
     Ok(())
 }
