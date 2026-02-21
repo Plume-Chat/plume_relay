@@ -1,4 +1,4 @@
-use std::{str::FromStr, usize};
+use std::{str::FromStr, env};
 
 use ed25519_dalek::{ed25519::signature, pkcs8::DecodePublicKey, Signature, VerifyingKey};
 
@@ -13,7 +13,15 @@ use ed25519_dalek::{ed25519::signature, pkcs8::DecodePublicKey, Signature, Verif
 ///
 /// WARN: A possible upgrade of this function would be to return a Result<bool, Enum> with a
 /// complete load of possible error cause so custom messages can be returned to senders
-pub fn verify_packet_signature(packet: String) -> bool {
+pub fn verify_packet_signature(packet: String) -> bool{
+    let environment = env::var("ENV").unwrap_or_default();
+
+    // disable verify_packet_signature in dev env or if SECURITY is disabled
+    if environment == "DEV" {
+        return true
+    }
+
+
     let mut split_informations: Vec<&str> = packet.split("__").collect();
 
     if split_informations.len() < 3 {

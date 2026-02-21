@@ -14,10 +14,9 @@ use tokio_tungstenite::tungstenite::protocol::{frame::coding::Data, Message};
 
 mod security;
 mod database;
+mod packet;
 
 use database::commande::Commandes;
-
-use crate::security::verify_packet_signature;
 
 type Tx = UnboundedSender<Message>;
 type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
@@ -66,6 +65,8 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
                 }
 
                 if !security::verify_packet_signature(msg.to_string()) {
+                    let environment = env::var("ENV");
+
                     // TODO: Upgrade security here (temp ban / warn)
                     let message = Message::text("error__Invalid payload, signature did not match");
                     if let Some(peer) = peers.iter().find(|(ip_addr, _)| ip_addr == &&addr) {
