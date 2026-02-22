@@ -1,14 +1,9 @@
 use std::{
-    collections::HashMap,
-    env,
-    io::Error as IoError,
-    net::SocketAddr,
-    sync::{Arc, Mutex},
+    collections::HashMap, env, io::Error as IoError, net::SocketAddr, sync::{Arc, Mutex}
 };
 
 use futures_channel::mpsc::{unbounded, UnboundedSender};
-use futures_util::{future, pin_mut, stream::TryStreamExt, StreamExt};
-
+use futures_util::{StreamExt, future, pin_mut, stream::TryStreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::protocol::Message;
 
@@ -18,7 +13,7 @@ mod packet;
 
 use database::commande::Commandes;
 
-use crate::packet::{Packet, PacketError, extract_and_verify};
+use crate::packet::{Packet, PacketError, PacketGeneration, RelayMessage, extract_and_verify};
 
 type Tx = UnboundedSender<Message>;
 type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
@@ -56,7 +51,6 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
                 }
             }
             Ok(Packet::RetrievePublished(_)) => {
-                // WARN: Still in test version
                 let message = Message::text("published_x__{test published x}");
 
                 // Return the message to the sender
@@ -66,64 +60,36 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
                 }
             }
             Ok(Packet::Message(message_data)) => {
-                // TODO: Currently a test version, this isn't supposed to last. Basically we are not broadcasting 
-                // message
+                let keys = keys_map.lock().unwrap();
+                let recipent_address = keys.iter().filter(|(_, key)| key == &&message_data.recipient).map(|(addr, _)| addr).collect::<Vec<&SocketAddr>>();
 
-                // We want to broadcast the message to everyone except ourselves.
-                let broadcast_recipients =
-                peers.iter().filter(|(peer_addr, _)| peer_addr != &&addr).map(|(_, ws_sink)| ws_sink);
+                let content = serde_json::to_string(&message_data).unwrap_or_default();
 
-                for recp in broadcast_recipients {
-                    let message = Message::text(format!("message__[{}] - {}",addr, msg_string)); // Sending the message to everyone
-                    recp.unbounded_send(message).unwrap();
+                for recp_addr in recipent_address {
+                    if let Some(recipent_conn) = peers.get(&addr) {
+                        let msg = Message::text(&content);
+                        recipent_conn.unbounded_send(msg).unwrap();
+                    }
                 }
             }
-            Ok(Packet::Login(request_data )) => {
-                let message = Message::text(format!("announcement__Successfully logged in using the following key :\n{}", request_data.author_key));
-                
-                // If we get the key then register it in the array
-                keys_map.lock().unwrap().insert(addr, request_data.author_key);
-
-
-                if let Some(peer) = peers.iter().find(|(ip_addr, _)| ip_addr == &&addr) {
-                    let (_, websocker_peer) = peer;
-                    websocker_peer.unbounded_send(message).unwrap();
-                } else {
-                    println!("Unable to get the sender in the peers_map to send back connection message");
-                }
-                return future::ok(());
+            Ok(Packet::Login(request_data)) => {
+                let message = serde_json::to_string(&RelayMessage::new("announcement", &format!("Successfully logged in using the following key : {}", request_data.author_key))).unwrap();
+                reply_user(addr, &peers, &message);
             }
             Err(PacketError::Signature) => {
-                // TODO: Upgrade security here (temp ban / warn)
-                let message = Message::text("error__Invalid payload, signature did not match");
-                if let Some(peer) = peers.iter().find(|(ip_addr, _)| ip_addr == &&addr) {
-                    let (_, websocker_peer) = peer;
-                    websocker_peer.unbounded_send(message).unwrap();
-                } else {
-                    println!("Unable to get the sender in the peers_map to send back connection message");
-                }
-                return future::ok(());
+                let message = serde_json::to_string(&RelayMessage::new("error", "Invalid payload, signature did not match")).unwrap();
+                reply_user(addr, &peers, &message);
             }
             Err(PacketError::Data) => {
                 todo!()
             }
             Err(PacketError::Type) => {
-                let message = Message::text("Unknown packet type");
-                if let Some(peer) = peers.iter().find(|(ip_addr, _)| ip_addr == &&addr) {
-                    let (_, websocker_peer) = peer;
-                    websocker_peer.unbounded_send(message).unwrap();
-                } else {
-                    println!("Unable to get the sender in the peers_map to send back error message");
-                }
+                let message = serde_json::to_string(&RelayMessage::new("error", "Unknown packet type")).unwrap();
+                reply_user(addr, &peers, &message);
             }
             Err(PacketError::Key) => {
-                let message = Message::text("Invalid Key given");
-                if let Some(peer) = peers.iter().find(|(ip_addr, _)| ip_addr == &&addr) {
-                    let (_, websocker_peer) = peer;
-                    websocker_peer.unbounded_send(message).unwrap();
-                } else {
-                    println!("Unable to get the sender in the peers_map to send back error message");
-                }
+                let message = serde_json::to_string(&RelayMessage::new("error", "Invalid key given")).unwrap();
+                reply_user(addr, &peers, &message);
             }
         }
 
@@ -141,11 +107,22 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
 }
 
 
+fn reply_user(user_addr: SocketAddr, peers_map: &HashMap<SocketAddr, Tx>, message: &str) {
+    let message = Message::text(message);
+    if let Some(peer) = peers_map.get(&user_addr) {
+        peer.unbounded_send(message).unwrap();
+    } else {
+        println!("Unable to get the sender in the peers_map to send back error message");
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), IoError> {
     let mut db_client: database::Database = database::Database { plume: database::connection::connection_database().await.expect("Erreur lors de la connection") };
     db_client.show_user_tables().await;
     //Panic si la db n'est pas lancé
+
+    plume_core::init();
 
     let addr = env::args().nth(1).unwrap_or_else(|| "127.0.0.1:8081".to_string());
 

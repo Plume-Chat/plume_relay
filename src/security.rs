@@ -33,7 +33,7 @@ pub fn verify_packet_signature(packet: &Packet) -> Result<(), PacketError> {
             return Ok(());
         }
         Packet::Message(packet_data) => {
-            let payload = format!("{}{}{}{}", packet_data.author_key, packet_data.recipent,  packet_data.content, packet_data.sent_at);
+            let payload = format!("{}{}{}{}", packet_data.author_key, packet_data.recipient,  packet_data.content, packet_data.sent_at);
             let key = VerifyingKey::from_public_key_pem(&packet_data.author_key)?;
             let signature = Signature::from_str(&packet_data.signature)?;
             key.verify_strict(payload.as_bytes(), &signature)?;

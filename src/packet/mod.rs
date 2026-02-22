@@ -1,3 +1,5 @@
+use std::fs;
+
 use ed25519_dalek::{ed25519::signature, pkcs8::spki};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -46,8 +48,9 @@ impl From<signature::Error> for PacketError {
 /// Date is in ISO 8601 format
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct MessageData {
+    pub action: String,
     pub author_key: String,
-    pub recipent: String,
+    pub recipient: String,
     pub sent_at: String, 
     pub content: String,
     pub signature: String
@@ -55,18 +58,54 @@ pub struct MessageData {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct LoginData {
+    pub action: String,
     pub author_key: String,
     pub signature: String
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct FriendRequestData {
+    pub action: String,
     pub author_key: String,
     pub recipent: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct RetrievePublishedData {
+    pub action: String,
+    pub author_key: String,
+    pub recipient: String,
+    pub key: String
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct RelayMessage {
+    pub action: String,
+    pub author_key: String, // Relay key here
+    pub message: String,
+    pub signature: String,
+}
+
+
+pub trait PacketGeneration {
+    fn new(action: &str, content: &str) -> Self;
+}
+
+/// Signature payload of the RelayMessage is action + relay_key + content
+impl PacketGeneration for RelayMessage {
+    fn new(action: &str, content: &str) -> Self {
+        let relay_config = plume_core::config::get_config();
+        let relay_key = fs::read_to_string(relay_config.me.public_ed_path).expect("Couldn't read relay public key");
+        let relay_private = fs::read_to_string(relay_config.me.private_ed_path).expect("Couldn't read relay public key");
+        let signature = plume_core::encryption::sign_packet(format!("{}{}{}", action, relay_key, content), &relay_private);
+        
+        Self {
+            action: action.to_string(),
+            author_key: relay_key,
+            message: content.to_string(),
+            signature
+        }
+    }
 }
 
 
@@ -114,4 +153,8 @@ pub fn extract(data: &str) -> Result<Packet, PacketError> {
             Err(PacketError::Type)
         }
     }
+}
+
+pub fn generate_and_sign(packet: Packet) {
+
 }
