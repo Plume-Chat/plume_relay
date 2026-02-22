@@ -1,56 +1,50 @@
 use std::{str::FromStr, env};
 
-use ed25519_dalek::{ed25519::signature, pkcs8::DecodePublicKey, Signature, VerifyingKey};
+use ed25519_dalek::{pkcs8::DecodePublicKey, Signature, VerifyingKey};
+
+use crate::packet::{Packet, PacketError};
 
 /// Verify the signature of a given packet.
-/// Remember, a packet will always follow same structure : 
+/// Packet are sent in json format, each packet will have it's own way to make the signature
+/// payload
 ///
-/// ```
-/// <type_packet>--<author_ed25519>--[infos supplémentaires]--<signature_auteur>
-/// ```
-/// So this function verify if the last data of the packet (signature so) can verify the whole rest
-/// of it and return a boolean corresponding to if it succeded or not
-///
-/// WARN: A possible upgrade of this function would be to return a Result<bool, Enum> with a
-/// complete load of possible error cause so custom messages can be returned to senders
-pub fn verify_packet_signature(packet: String) -> bool{
+/// # Formats
+/// ## Login
+/// Signed payload is simply composed of the author key
+/// ## Messages
+/// Signed payload is author_key + recipent_key + content + sent_at
+/// ## Friend Request
+/// ## Retrieve Published
+pub fn verify_packet_signature(packet: &Packet) -> Result<(), PacketError> {
     let environment = env::var("ENV").unwrap_or_default();
 
-    // disable verify_packet_signature in dev env or if SECURITY is disabled
+    // disable verify_packet_signature in dev env
     if environment == "DEV" {
-        return true
+        return Ok(())
     }
 
 
-    let mut split_informations: Vec<&str> = packet.split("__").collect();
+    match packet {
+        Packet::Login(packet_data) => {
+            let key = VerifyingKey::from_public_key_pem(&packet_data.author_key)?;
+            let signature = Signature::from_str(&packet_data.signature)?;
+            key.verify_strict(&packet_data.author_key.as_bytes(), &signature)?;
+            
+            return Ok(());
+        }
+        Packet::Message(packet_data) => {
+            let payload = format!("{}{}{}{}", packet_data.author_key, packet_data.recipent,  packet_data.content, packet_data.sent_at);
+            let key = VerifyingKey::from_public_key_pem(&packet_data.author_key)?;
+            let signature = Signature::from_str(&packet_data.signature)?;
+            key.verify_strict(payload.as_bytes(), &signature)?;
 
-    if split_informations.len() < 3 {
-        return false
+            Ok(())
+        }
+        Packet::FriendRequest(_) => {
+            todo!()
+        }
+        Packet::RetrievePublished(_) => {
+            todo!()
+        }
     }
-
-    if let Ok(key) = VerifyingKey::from_public_key_pem(&split_informations[1]) {
-        // Now we can verify message by joining all remaining elements with -- and compare the
-        // signature + key with it
-
-
-        if let Ok(signature) = Signature::from_str(split_informations.pop().unwrap()) {
-            let content = split_informations.join("__");
-            println!("Veriying string : {}", content);
-
-            match key.verify_strict(&content.as_bytes(), &signature) {
-                Ok(_) => {
-                    return true;
-                },
-                Err(_) => {
-                    return false;
-                }
-            }
-        }     
-
-        println!("Invalid Signature format")
-
-    } 
-
-    println!("Invalid key : {}", &split_informations[1]);
-    return false
 }

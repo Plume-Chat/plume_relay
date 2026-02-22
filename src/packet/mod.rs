@@ -1,104 +1,117 @@
+use ed25519_dalek::{ed25519::signature, pkcs8::spki};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
 use crate::security::verify_packet_signature;
 
 /// Differents types of packets, all new packets will be added here
-pub enum Packet<'a> {
+pub enum Packet {
     Login(LoginData),
-    Message(MessageData<'a>),
+    Message(MessageData),
     FriendRequest(FriendRequestData),
     RetrievePublished(RetrievePublishedData),
 }
 
 /// All the reason why a packet extraction may fail. 
-/// InvalidPacket means that the packet is not recognised
-/// InvalidData means that the packet content isn't correctly split or is simply missing
+/// **Type** means that the packet is not recognised
+/// **Data** means that the packet content isn't correctly split or is simply missing
+/// **Signature** Means that the signature was incorrect
+/// **Key** Means that the key was incorrect
 pub enum PacketError {
-    PacketFormat,
+    Type,
     Data,
-    Signature
+    Signature,
+    Key // invalid key given
+}
+
+impl From<serde_json::Error> for PacketError {
+    fn from(_: serde_json::Error) -> Self {
+        PacketError::Data
+    }
+}
+
+impl From<spki::Error> for PacketError {
+    fn from(_: spki::Error) -> Self {
+        PacketError::Key
+    }
+}
+
+impl From<signature::Error> for PacketError {
+    fn from(_: signature::Error) -> Self {
+        PacketError::Signature
+    }
 }
 
 /// Data provided for the message packet
-pub struct MessageData<'a> {
-    author_key: String,
-    message: &'a str,
-    recipent: &'a str,
-    signature: String
+/// Date is in ISO 8601 format
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct MessageData {
+    pub author_key: String,
+    pub recipent: String,
+    pub sent_at: String, 
+    pub content: String,
+    pub signature: String
 }
 
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct LoginData {
     pub author_key: String,
     pub signature: String
 }
 
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct FriendRequestData {
-
+    pub author_key: String,
+    pub recipent: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct RetrievePublishedData {
-
 }
 
 
-
-/// Transform a string into a packet with all the necessary data and verify it's signature
-/// Packet format is the following : 
-/// ```text
-/// <packet_type>__<author_ed_key>__[packet_data]__<signature>
-/// ```
+/// Transform a json string into a packet with all the necessary data and verify it's signature
 ///
 /// packet_data is a collections or all the data required for this packet in order and split by "__".  
 /// **Example**:
 /// ```rust
 /// use plume::packet;
-/// let received = String::from("login__myKey__signature");
+///
+/// let login_packet = r#"
+///     {
+///         "type": "login",
+///         "author_key": "<MyKey>"
+///     }"#;
+/// let received = String::from(login_packet);
 /// let packet: Packet = extract_packet(received);
 /// ```
 ///
-pub fn extract_and_verify<'a> (data: &'a str) -> Result<Packet<'a>, PacketError> {
+pub fn extract_and_verify (data: &str) -> Result<Packet, PacketError> {
     let packet = extract(data)?;
 
-    if !verify_packet_signature(data.to_string()) {
-        return Err(PacketError::Signature);
-    }
+    verify_packet_signature(&packet)?;
 
     Ok(packet)
 }
 
-pub fn extract<'a> (data: &'a str) -> Result<Packet<'a>, PacketError> {
-    let packet_split: Vec<&str> = data.split("__").collect();
+pub fn extract(data: &str) -> Result<Packet, PacketError> {
+    let packet: Value = serde_json::from_str(data)?;
+    let packet_type = packet["action"].as_str().unwrap_or_default();
+    println!("Packet Type is : {}", packet_type);
 
-    if packet_split.is_empty() {
-        return Err(PacketError::PacketFormat);
-    }
-
-    match *packet_split.first().expect("Unable to retrieve packet type") {
+    match packet_type {
         "login" => {
-            if packet_split.len() < 3 {
-                return Err(PacketError::Data);
-            }
-
-            Ok(Packet::Login(LoginData { 
-                author_key: packet_split[1].to_string(), 
-                signature: packet_split[2].to_string() 
-            }))
+            Ok(Packet::Login(serde_json::from_str(data)?))
         }
         "message" => {
-            if packet_split.len() < 5 {
-                return Err(PacketError::Data);
-            }
-
-            Ok(Packet::Message(MessageData { 
-                author_key: packet_split[1].to_string(), 
-                message: packet_split[2],
-                recipent: packet_split[3], 
-                signature: packet_split[4].to_string()
-            }))
+            Ok(Packet::Message(serde_json::from_str(data)?))
         }
         "friend_request" => {
             todo!()
+            // Ok(Packet::FriendRequest(serde_json::from_str(data)?))
         }
         _ => {
-            Err(PacketError::PacketFormat)
+            Err(PacketError::Type)
         }
     }
 }
