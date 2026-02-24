@@ -94,7 +94,8 @@ async fn handle_connection(peer_map: PeerMap, raw_stream: TcpStream, addr: Socke
                 reply_user(addr, &peers, &mut response);
             }
             Err(PacketReadingError::Data) => {
-                todo!()
+                let mut response = Packet::Error(ErrorData::new("Missing data in the packet"));
+                reply_user(addr, &peers, &mut response);
             }
             Err(PacketReadingError::Type) => {
                 let mut response = Packet::Error(ErrorData::new("Unknown packet type"));

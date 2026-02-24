@@ -974,7 +974,7 @@ checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 [[package]]
 name = "plume_core"
 version = "0.1.0"
-source = "git+https://github.com/AmourDev77/plume_core.git#64b4bb48ed2f468a182a5832fdcb70e45d886465"
+source = "git+https://github.com/AmourDev77/plume_core.git#157781ddc856527089ce8971c15ad5583268a701"
 dependencies = [
  "base64",
  "ed25519-dalek",
